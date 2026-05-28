@@ -1,6 +1,5 @@
 """
 Etherpad Exporter
-Lädt Etherpad-Dokumente in verschiedenen Formaten herunter und speichert sie lokal.
 """
 
 import requests
@@ -31,15 +30,23 @@ class EtherpadExporter:
         "User-Agent": "Mozilla/5.0 (compatible; EtherpadExporter/1.0)"
     }
 
+    TIMEOUT = 30
+    RETRIES = 3
+
     def _download(self, url: str) -> bytes | None:
         """Lädt eine URL herunter. Gibt None bei Fehler zurück."""
-        try:
-            response = requests.get(url, headers=self.HEADERS, timeout=10)
-            response.raise_for_status()
-            return response.content
-        except requests.RequestException as e:
-            print(f"  ✗ Fehler beim Abrufen von {url}: {e}")
-            return None
+        for attempt in range(1, self.RETRIES + 1):
+            try:
+                response = requests.get(url, headers=self.HEADERS, timeout=self.TIMEOUT)
+                response.raise_for_status()
+                return response.content
+            except requests.Timeout:
+                print(f"  ⏱ Timeout (Versuch {attempt}/{self.RETRIES}): {url}")
+            except requests.RequestException as e:
+                print(f"  ✗ Fehler beim Abrufen von {url}: {e}")
+                return None  # Bei anderen Fehlern (z.B. 403) sofort abbrechen
+        print(f"  ✗ Alle {self.RETRIES} Versuche fehlgeschlagen: {url}")
+        return None
 
     def export_pad(self, pad_url: str) -> dict[str, bool]:
         """
