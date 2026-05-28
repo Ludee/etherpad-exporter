@@ -1,7 +1,9 @@
 """
 Etherpad Exporter
+Lädt Etherpad-Dokumente in verschiedenen Formaten herunter und speichert sie lokal.
 """
 
+import time
 import requests
 from pathlib import Path
 from urllib.parse import urlparse
@@ -11,6 +13,12 @@ class EtherpadExporter:
     """Exportiert Etherpads in verschiedenen Formaten."""
 
     EXPORT_FORMATS = ["etherpad", "html", "txt"]
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (compatible; EtherpadExporter/1.0)"
+    }
+    TIMEOUT = 30
+    RETRIES = 3
+    RETRY_DELAY = 5  # Sekunden Pause vor jedem Retry-Durchlauf
 
     def __init__(self, output_dir: str = "pads", formats: list[str] = None):
         self.output_dir = Path(output_dir)
@@ -25,13 +33,6 @@ class EtherpadExporter:
     def _export_url(self, base_url: str, fmt: str) -> str:
         """Baut die Export-URL zusammen."""
         return f"{base_url.rstrip('/')}/export/{fmt}"
-
-    HEADERS = {
-        "User-Agent": "Mozilla/5.0 (compatible; EtherpadExporter/1.0)"
-    }
-
-    TIMEOUT = 30
-    RETRIES = 3
 
     def _download(self, url: str) -> bytes | None:
         """Lädt eine URL herunter. Gibt None bei Fehler zurück."""
@@ -48,14 +49,13 @@ class EtherpadExporter:
         print(f"  ✗ Alle {self.RETRIES} Versuche fehlgeschlagen: {url}")
         return None
 
-    def export_pad(self, pad_url: str) -> dict[str, bool]:
+    def export_pad(self, pad_url: str) -> bool:
         """
         Exportiert ein einzelnes Pad in allen konfigurierten Formaten.
-        Gibt ein Dict zurück: {format: success}
+        Gibt True zurück wenn alle Formate erfolgreich waren, sonst False.
         """
         pad_name = self._pad_name(pad_url)
         print(f"Exportiere: {pad_name}")
-        results = {}
 
         for fmt in self.formats:
             export_url = self._export_url(pad_url, fmt)
@@ -65,24 +65,40 @@ class EtherpadExporter:
                 file_path = self.output_dir / f"{pad_name}.{fmt}"
                 file_path.write_bytes(content)
                 print(f"  ✓ {fmt:10} → {file_path}")
-                results[fmt] = True
             else:
-                results[fmt] = False
+                print(f"  ✗ {fmt:10} fehlgeschlagen – Pad wird wiederholt")
+                return False  # Pad als Ganzes in die Retry-Queue
 
-        return results
+        return True
 
     def export_all(self, pad_urls: list[str]) -> None:
-        """Exportiert eine Liste von Pad-URLs."""
-        total = len(pad_urls)
-        success_count = 0
+        """
+        Exportiert alle Pads. Fehlgeschlagene werden in Folgedurchläufen
+        wiederholt, bis alle erfolgreich exportiert wurden.
+        """
+        queue = list(pad_urls)
+        total = len(queue)
+        run = 1
 
-        for i, url in enumerate(pad_urls, 1):
-            print(f"\n[{i}/{total}]", end=" ")
-            results = self.export_pad(url)
-            if any(results.values()):
-                success_count += 1
+        while queue:
+            print(f"\n{'─' * 50}")
+            print(f"Durchlauf {run} – {len(queue)}/{total} Pad(s) verbleibend")
+            print(f"{'─' * 50}")
 
-        print(f"\n✓ Fertig: {success_count}/{total} Pads erfolgreich exportiert.")
+            failed = []
+            for i, url in enumerate(queue, 1):
+                print(f"\n[{i}/{len(queue)}]", end=" ")
+                if not self.export_pad(url):
+                    failed.append(url)
+
+            queue = failed
+            run += 1
+
+            if queue:
+                print(f"\n⚠ {len(queue)} Pad(s) fehlgeschlagen – neuer Versuch in {self.RETRY_DELAY}s ...")
+                time.sleep(self.RETRY_DELAY)
+
+        print(f"\n✓ Fertig: alle {total} Pads erfolgreich exportiert.")
         print(f"  Gespeichert in: {self.output_dir.resolve()}")
 
 
